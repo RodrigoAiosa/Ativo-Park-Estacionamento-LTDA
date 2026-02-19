@@ -1,5 +1,5 @@
 import streamlit as st
-import fitz  # PyMuPDF
+import fitz
 import re
 import gc
 import tempfile
@@ -43,12 +43,15 @@ def parsear_linha(linha):
         ])
     return None
 
-def processar_pdf(caminho_pdf):
-    padrao_emissao      = r"Emissao Periodo.*?Valores Lancados"
-    padrao_detalhamento = r"DETALHAMENTO DAS TRANSACOES.*?RELATORIO DE TRANSACOES"
-    padrao_pagina       = r"Pagina:\s*\d+\s*de\s*\d+"
-    cabecalho_colunas   = "Caixa V. Lancado Data Tarifa V. Estadia Ticket V. Abonado Transacao T. Fiscais Sessao Abono Forma"
+def limpar_conteudo(conteudo):
+    conteudo = re.sub(r'Emiss.o\s+Per.odo.*?Valores\s+Lan.ados', '', conteudo, flags=re.DOTALL | re.IGNORECASE)
+    conteudo = re.sub(r'DETALHAMENTO\s+DAS\s+TRANSA..ES.*?RELAT.RIO\s+DE\s+TRANSA..ES', '', conteudo, flags=re.DOTALL | re.IGNORECASE)
+    conteudo = re.sub(r'P.gina:\s*\d+\s*de\s*\d+', '', conteudo, flags=re.IGNORECASE)
+    conteudo = re.sub(r'Caixa\s+V\.\s*Lan.ado\s+Data\s+Tarifa.*?Abono\s+Forma', '', conteudo, flags=re.DOTALL | re.IGNORECASE)
+    conteudo = re.sub(r'^\s*PGTO\s*$', '', conteudo, flags=re.MULTILINE)
+    return conteudo
 
+def processar_pdf(caminho_pdf):
     progress         = st.progress(0)
     status           = st.empty()
     total_transacoes = 0
@@ -61,22 +64,16 @@ def processar_pdf(caminho_pdf):
         status.info(f"Processando pagina {i + 1} de {total}...")
 
         try:
-            pagina   = doc[i]
-            conteudo = pagina.get_text("text")
-            pagina   = None
+            conteudo = doc[i].get_text("text")
         except Exception:
             conteudo = None
 
         if conteudo:
-            conteudo = re.sub(padrao_emissao, "", conteudo, flags=re.DOTALL | re.IGNORECASE)
-            conteudo = re.sub(padrao_detalhamento, "", conteudo, flags=re.DOTALL | re.IGNORECASE)
-            conteudo = re.sub(padrao_pagina, "", conteudo, flags=re.IGNORECASE)
-            conteudo = conteudo.replace(cabecalho_colunas, "")
-            conteudo = re.sub(r'\bPGTO\b', '', conteudo)
+            conteudo = limpar_conteudo(conteudo)
 
             for linha in conteudo.split('\n'):
                 linha = linha.strip()
-                if not linha or 'PGTO' in linha.upper():
+                if not linha or linha.upper() == 'PGTO':
                     continue
                 resultado = parsear_linha(linha)
                 if resultado:
@@ -89,6 +86,8 @@ def processar_pdf(caminho_pdf):
         progress.progress(int(((i + 1) / total) * 100))
 
     doc.close()
+    gc.collect()
+
     status.success(f"Concluido! {total} paginas | {total_transacoes} transacoes.")
     return "\n".join(linhas_resultado)
 
