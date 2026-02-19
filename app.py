@@ -10,162 +10,115 @@ CABECALHO = "Caixa;Transacao;T. Fiscais;Sessao;Data;Tarifa;V. Estadia;Abono;V. A
 def limpar_valor(v):
     return v.strip().replace("R$ ", "R$")
 
-def eh_cabecalho_ou_rodape(linha):
-    padroes = [
-        r'^Emiss', r'^Per.odo', r'^Valores', r'^DETALHAMENTO',
-        r'^RELAT', r'^P.gina\s*:', r'^Emitido', r'^Transa..es$',
-        r'^T\.\s*Fiscais$', r'^Caixa$', r'^V\.\s*Lan.ado$',
-        r'^Data$', r'^Tarifa$', r'^V\.\s*Estadia$', r'^Ticket$',
-        r'^V\.\s*Abonado$', r'^Transa..o$', r'^Sess.o$',
-        r'^Abono$', r'^Forma$', r'^PGTO$',
-        r'^\d{2}/\d{2}/\d{4}$',  # so data sem hora
-        r'^R\$\s*[\d.]+$',        # so valor monetario
-        r'^[a-z]\s*$',            # letra solta
-        r'^\d+$',                 # numero isolado
-        r'^Rorigo', r'^Rodrigo',
-    ]
-    for p in padroes:
-        if re.match(p, linha, re.IGNORECASE):
-            return True
-    return False
-
-def agrupar_transacoes(linhas):
-    """
-    O PDF tem cada campo em linha separada.
-    Uma transacao completa tem exatamente os campos:
-    caixa, data+hora, sessao, t.fiscais, transacao(numero longo),
-    v.lancado, v.estadia, v.abonado, ticket, forma(opcional)
-    
-    Estrategia: agrupa blocos entre datas (dd/mm/aa HH:MM:SS)
-    """
-    resultado = []
-    bloco = []
-
-    padrao_data = re.compile(r'^\d{2}/\d{2}/\d{2}$')
-    padrao_hora = re.compile(r'^\d{2}:\d{2}:\d{2}$')
-    padrao_valor = re.compile(r'^R\$\s*[\d.]+$')
-    padrao_transacao = re.compile(r'^\d{9,}$')
-
-    i = 0
-    while i < len(linhas):
-        linha = linhas[i].strip()
-
-        # Detecta inicio de nova transacao: linha com data dd/mm/aa
-        # seguida de hora HH:MM:SS
-        if padrao_data.match(linha) and i + 1 < len(linhas) and padrao_hora.match(linhas[i+1].strip()):
-            if bloco:
-                resultado.append(bloco)
-            bloco = [linha + " " + linhas[i+1].strip()]  # junta data e hora
-            i += 2
-        else:
-            if bloco is not None:
-                bloco.append(linha)
-            i += 1
-
-    if bloco:
-        resultado.append(bloco)
-
-    return resultado
-
-def montar_linha_csv(bloco):
-    """
-    Monta uma linha CSV a partir de um bloco de campos.
-    Ordem esperada no bloco apos agrupar:
-    [0] data+hora, depois campos variados
-    Precisamos identificar cada campo pelo seu formato.
-    """
-    padrao_valor   = re.compile(r'^R\$\s*[\d.]+$')
-    padrao_ticket  = re.compile(r'^\d{9,}$')
-    padrao_numero  = re.compile(r'^\d{1,4}$')
-    padrao_datahora = re.compile(r'^\d{2}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2}$')
-
-    data     = ""
-    caixa    = ""
-    sessao   = ""
-    t_fisc   = ""
-    transacao = ""
-    valores  = []
-    forma    = ""
-    ticket   = ""
-
-    for campo in bloco:
-        campo = campo.strip()
-        if not campo or campo.upper() == 'PGTO':
-            continue
-        if padrao_datahora.match(campo):
-            data = campo
-        elif padrao_ticket.match(campo):
-            ticket = campo
-        elif padrao_valor.match(campo):
-            valores.append(limpar_valor(campo))
-        elif padrao_numero.match(campo):
-            if not sessao:
-                sessao = campo
-            elif not t_fisc:
-                t_fisc = campo
-        elif re.match(r'^(Dinheiro|Porto|Nota|Cart|PIX|debito|credito)', campo, re.IGNORECASE):
-            forma = campo
-        elif re.match(r'^caixa\s+', campo, re.IGNORECASE) or 'buzios' in campo.lower() or 'caixa' in campo.lower():
-            caixa = campo
-        else:
-            if not caixa:
-                caixa = campo
-
-    # valores: [v_lancado, v_estadia, v_abonado] — ordem que aparece no PDF
-    v_lancado = valores[0] if len(valores) > 0 else ""
-    v_estadia = valores[1] if len(valores) > 1 else ""
-    v_abonado = valores[2] if len(valores) > 2 else ""
-
-    if not data:
-        return None
-
-    return ";".join([caixa, ticket, t_fisc, sessao, data, "PORTO",
-                     v_estadia, "", v_abonado, v_lancado, ticket, forma])
+def parsear_linha(linha):
+    linha = re.sub(r'\bPGTO\b', '', linha).strip()
+    padrao = re.compile(
+        r'^(\S.*?)\s+'
+        r'(\d{2}/\d{2}/\d{2})\s+'
+        r'(\d{2}:\d{2}:\d{2})\s+'
+        r'(.+?)\s+'
+        r'(\d+)\s+'
+        r'(\d+)\s+'
+        r'(\d{9,})\s+'
+        r'(R\$\s*[\d.]+)\s+'
+        r'(R\$\s*[\d.]+)\s+'
+        r'(\S+)\s+'
+        r'(R\$\s*[\d.]+)$'
+    )
+    m = padrao.match(linha)
+    if m:
+        return ";".join([
+            m.group(1),
+            m.group(7),
+            m.group(5),
+            m.group(4),
+            m.group(2) + " " + m.group(3),
+            limpar_valor(m.group(11)),
+            limpar_valor(m.group(9)),
+            m.group(6),
+            "R$0.00",
+            limpar_valor(m.group(8)),
+            "",
+            m.group(10),
+        ])
+    return None
 
 def processar_pdf(caminho_pdf):
-    progress         = st.progress(0)
-    status           = st.empty()
+    progress = st.progress(0)
+    status   = st.empty()
     total_transacoes = 0
-    linhas_resultado = [CABECALHO]
 
-    doc   = fitz.open(caminho_pdf)
-    total = len(doc)
+    tmp_saida = tempfile.NamedTemporaryFile(mode='w', suffix='.txt',
+                                            encoding='utf-8', delete=False)
+    tmp_saida.write(CABECALHO + "\n")
 
-    todas_linhas = []
+    # Guarda amostra das primeiras linhas brutas para debug
+    amostra_pg2 = []
 
-    for i in range(total):
-        status.info(f"Lendo pagina {i + 1} de {total}...")
+    try:
+        doc   = fitz.open(caminho_pdf)
+        total = len(doc)
+
+        for i in range(total):
+            status.info(f"Pagina {i + 1} de {total}...")
+
+            try:
+                # Tenta extrair como "words" para reconstruir linhas com coordenadas
+                page = doc[i]
+                blocks = page.get_text("blocks")
+                linhas_pagina = []
+                for b in blocks:
+                    texto_bloco = b[4].strip()
+                    if texto_bloco:
+                        # Cada bloco pode ter multiplas linhas
+                        for l in texto_bloco.split('\n'):
+                            l = l.strip()
+                            if l:
+                                linhas_pagina.append(l)
+
+            except Exception:
+                linhas_pagina = []
+
+            # Captura pagina 2 para debug (pagina 1 é cabecalho)
+            if i == 1 and not amostra_pg2:
+                amostra_pg2 = linhas_pagina[:30]
+
+            for linha in linhas_pagina:
+                if not linha:
+                    continue
+                resultado = parsear_linha(linha)
+                if resultado:
+                    tmp_saida.write(resultado + "\n")
+                    total_transacoes += 1
+
+            if i % 50 == 0:
+                gc.collect()
+
+            progress.progress(int(((i + 1) / total) * 100))
+
+        doc.close()
+        tmp_saida.close()
+        status.success(f"Concluido! {total} paginas | {total_transacoes} transacoes.")
+
+        # Se 0 transacoes, mostra diagnostico
+        if total_transacoes == 0:
+            st.warning("0 transacoes encontradas. Amostra das linhas brutas da pagina 2:")
+            st.code("\n".join(amostra_pg2))
+            return None
+
+        with open(tmp_saida.name, 'r', encoding='utf-8') as f:
+            return f.read()
+
+    except Exception as e:
+        st.error(f"Erro: {e}")
+        return None
+    finally:
         try:
-            conteudo = doc[i].get_text("text")
+            tmp_saida.close()
         except Exception:
-            conteudo = None
-
-        if conteudo:
-            for linha in conteudo.split('\n'):
-                l = linha.strip()
-                if l and not eh_cabecalho_ou_rodape(l):
-                    todas_linhas.append(l)
-
-        if i % 50 == 0:
-            gc.collect()
-
-        progress.progress(int(((i + 1) / total) * 100))
-
-    doc.close()
-    gc.collect()
-
-    status.info("Montando transacoes...")
-
-    blocos = agrupar_transacoes(todas_linhas)
-
-    for bloco in blocos:
-        linha_csv = montar_linha_csv(bloco)
-        if linha_csv:
-            linhas_resultado.append(linha_csv)
-            total_transacoes += 1
-
-    status.success(f"Concluido! {total} paginas | {total_transacoes} transacoes.")
-    return "\n".join(linhas_resultado)
+            pass
+        if os.path.exists(tmp_saida.name):
+            os.unlink(tmp_saida.name)
 
 
 def main():
@@ -194,15 +147,15 @@ def main():
                     st.session_state.texto_final = resultado
                     st.session_state.nome_arquivo = arquivo_carregado.name.replace(".pdf", "_extraido.txt")
             finally:
-                os.unlink(tmp_pdf.name)
+                if os.path.exists(tmp_pdf.name):
+                    os.unlink(tmp_pdf.name)
 
     if st.session_state.texto_final:
         total_linhas = len(st.session_state.texto_final.splitlines()) - 1
         st.info(f"{total_linhas} transacoes prontas para download.")
-        st.text_area("Previa (primeiras linhas):",
+        st.text_area("Previa:",
                      "\n".join(st.session_state.texto_final.splitlines()[:20]),
                      height=200)
-
         st.download_button(
             label="Baixar arquivo .txt",
             data=st.session_state.texto_final.encode("utf-8"),
