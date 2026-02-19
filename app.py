@@ -1,10 +1,12 @@
 import streamlit as st
 import pdfplumber
 import re
-import gc  # garbage collector para liberar memória
+import gc
+import tempfile
+import os
 
 CABECALHO = "Caixa;Transação;T. Fiscais;Sessão;Data;Tarifa;V. Estadia;Abono;V. Abonado;V. Lançado;Ticket;Forma PGTO"
-TAMANHO_LOTE = 20  # processa 50 páginas por vez
+TAMANHO_LOTE = 30
 
 def limpar_valor(v):
     return v.strip().replace("R$ ", "R$")
@@ -53,14 +55,16 @@ def extrair_texto_pdf(arquivo_pdf):
 
         progress = st.progress(0)
         status   = st.empty()
+        total_transacoes = 0
 
-        linhas_processadas = [CABECALHO]
-        total_transacoes   = 0
+        # ✅ Grava direto em arquivo temporário no disco — não usa RAM
+        tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.txt',
+                                          encoding='utf-8', delete=False)
+        tmp.write(CABECALHO + "\n")
 
         with pdfplumber.open(arquivo_pdf) as pdf:
             total = len(pdf.pages)
 
-            # ✅ Processa em lotes para não estourar memória
             for lote_inicio in range(0, total, TAMANHO_LOTE):
                 lote_fim   = min(lote_inicio + TAMANHO_LOTE, total)
                 texto_lote = ""
@@ -68,8 +72,10 @@ def extrair_texto_pdf(arquivo_pdf):
                 for i in range(lote_inicio, lote_fim):
                     status.info(f"🔄 Processando página **{i + 1}** de **{total}**...")
 
-                    pagina   = pdf.pages[i]
-                    conteudo = pagina.extract_text()
+                    try:
+                        conteudo = pdf.pages[i].extract_text()
+                    except Exception:
+                        conteudo = None
 
                     if conteudo:
                         conteudo = re.sub(padrao_emissao, "", conteudo, flags=re.DOTALL | re.IGNORECASE)
@@ -79,27 +85,31 @@ def extrair_texto_pdf(arquivo_pdf):
                         conteudo = re.sub(r'\bPGTO\b', '', conteudo)
                         texto_lote += conteudo + "\n"
 
-                    percent = int(((i + 1) / total) * 100)
-                    progress.progress(percent)
+                    progress.progress(int(((i + 1) / total) * 100))
 
-                # Processa as linhas do lote atual
-                linhas_brutas = [
-                    l.strip() for l in texto_lote.split('\n')
-                    if l.strip() and 'PGTO' not in l.upper()
-                ]
-
-                for linha in linhas_brutas:
+                # ✅ Processa lote e grava no disco imediatamente
+                for linha in texto_lote.split('\n'):
+                    linha = linha.strip()
+                    if not linha or 'PGTO' in linha.upper():
+                        continue
                     resultado = parsear_linha(linha)
                     if resultado:
-                        linhas_processadas.append(resultado)
+                        tmp.write(resultado + "\n")
                         total_transacoes += 1
 
-                # ✅ Libera memória do lote antes de continuar
-                del texto_lote, linhas_brutas
+                # ✅ Libera memória do lote
+                del texto_lote
                 gc.collect()
 
+        tmp.close()
         status.success(f"✅ Concluído! {total} páginas | {total_transacoes} transações extraídas.")
-        return "\n".join(linhas_processadas)
+
+        # ✅ Lê o arquivo do disco só no final para o download
+        with open(tmp.name, 'r', encoding='utf-8') as f:
+            conteudo_final = f.read()
+
+        os.unlink(tmp.name)  # apaga o arquivo temporário
+        return conteudo_final
 
     except Exception as e:
         st.error(f"Erro ao processar o PDF: {e}")
@@ -130,7 +140,7 @@ def main():
     if st.session_state.texto_final:
         total_linhas = len(st.session_state.texto_final.splitlines()) - 1
         st.info(f"📊 {total_linhas} transações prontas para download.")
-        st.text_area("Prévia:", st.session_state.texto_final, height=200)
+        st.text_area("Prévia:", st.session_state.texto_final[:3000], height=200)
 
         st.download_button(
             label="📥 Baixar arquivo .txt",
