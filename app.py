@@ -1,6 +1,7 @@
 import streamlit as st
 import PyPDF2
 import io
+import re
 
 def extrair_texto_pdf(arquivo_pdf):
     try:
@@ -10,10 +11,23 @@ def extrair_texto_pdf(arquivo_pdf):
         for i, pagina in enumerate(leitor.pages):
             conteudo = pagina.extract_text()
             if conteudo:
-                texto_acumulado += f"--- Início da Página {i+1} ---\n"
-                texto_acumulado += conteudo + "\n\n"
+                # 1. Remover o cabeçalho específico de Emissão e Transações
+                conteudo = re.sub(r"Emissão Período.*Values Lançados", "", conteudo, flags=re.DOTALL)
+                conteudo = re.sub(r"DETALHAMENTO DAS TRANSAÇÕESRELATÓRIO DE TRANSAÇÕES", "", conteudo)
+                
+                # 2. Remover "Página: X de Y"
+                conteudo = re.sub(r"Página:\s*\d+\s*de\s*\d+", "", conteudo)
+                
+                # 3. Remover o cabeçalho das colunas (Caixa, V. Lançado, etc.)
+                cabecalho_colunas = "Caixa V. Lançado Data Tarifa V. Estadia Ticket V. Abonado Transação T. Fiscais Sessão Abono Forma"
+                conteudo = conteudo.replace(cabecalho_colunas, "")
+                
+                texto_acumulado += conteudo + "\n"
         
-        return texto_acumulado
+        # Limpeza final de espaços em branco excessivos
+        texto_limpo = "\n".join([linha.strip() for linha in texto_acumulado.split('\n') if linha.strip()])
+        
+        return texto_limpo
     except Exception as e:
         st.error(f"Erro ao processar o PDF: {e}")
         return None
@@ -36,7 +50,7 @@ def main():
                 texto_extraido = extrair_texto_pdf(arquivo_carregado)
                 
                 if texto_extraido:
-                    st.text_area("Prévia do Texto Extraído:", texto_extraido, height=300)
+                    st.text_area("Prévia do Texto Extraído (Limpo):", texto_extraido, height=300)
                     
                     # Preparar download
                     nome_arquivo_txt = arquivo_carregado.name.replace(".pdf", "_extraido.txt")
