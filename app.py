@@ -43,19 +43,12 @@ def parsear_linha(linha):
         ])
     return None
 
-def limpar_conteudo(conteudo):
-    conteudo = re.sub(r'Emiss.o\s+Per.odo.*?Valores\s+Lan.ados', '', conteudo, flags=re.DOTALL | re.IGNORECASE)
-    conteudo = re.sub(r'DETALHAMENTO\s+DAS\s+TRANSA..ES.*?RELAT.RIO\s+DE\s+TRANSA..ES', '', conteudo, flags=re.DOTALL | re.IGNORECASE)
-    conteudo = re.sub(r'P.gina:\s*\d+\s*de\s*\d+', '', conteudo, flags=re.IGNORECASE)
-    conteudo = re.sub(r'Caixa\s+V\.\s*Lan.ado\s+Data\s+Tarifa.*?Abono\s+Forma', '', conteudo, flags=re.DOTALL | re.IGNORECASE)
-    conteudo = re.sub(r'^\s*PGTO\s*$', '', conteudo, flags=re.MULTILINE)
-    return conteudo
-
 def processar_pdf(caminho_pdf):
     progress         = st.progress(0)
     status           = st.empty()
     total_transacoes = 0
     linhas_resultado = [CABECALHO]
+    amostra_debug    = []  # guarda primeiras linhas brutas para debug
 
     doc   = fitz.open(caminho_pdf)
     total = len(doc)
@@ -69,11 +62,18 @@ def processar_pdf(caminho_pdf):
             conteudo = None
 
         if conteudo:
-            conteudo = limpar_conteudo(conteudo)
+            # Captura amostra das primeiras 3 paginas para debug
+            if i < 3:
+                amostra_debug.append(f"=== PAGINA {i+1} ===\n" + conteudo[:500])
 
             for linha in conteudo.split('\n'):
                 linha = linha.strip()
-                if not linha or linha.upper() == 'PGTO':
+                if not linha:
+                    continue
+                # Ignora linhas que sao claramente cabecalho/rodape
+                if re.search(r'(Emiss|Periodo|Valores|DETALHAMENTO|RELAT|Pagina\s*:\s*\d)', linha, re.IGNORECASE):
+                    continue
+                if re.match(r'^(Caixa|Transa|Ticket|Tarifa|Sessao|Abono|Forma)', linha, re.IGNORECASE):
                     continue
                 resultado = parsear_linha(linha)
                 if resultado:
@@ -89,6 +89,13 @@ def processar_pdf(caminho_pdf):
     gc.collect()
 
     status.success(f"Concluido! {total} paginas | {total_transacoes} transacoes.")
+
+    # Mostra debug se nao encontrou transacoes
+    if total_transacoes == 0 and amostra_debug:
+        st.warning("Nenhuma transacao encontrada. Mostrando texto bruto das primeiras paginas para diagnostico:")
+        st.text("\n\n".join(amostra_debug))
+        return None
+
     return "\n".join(linhas_resultado)
 
 
