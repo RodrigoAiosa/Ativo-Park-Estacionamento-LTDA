@@ -1,8 +1,10 @@
 import streamlit as st
 import pdfplumber
 import re
+import gc  # garbage collector para liberar memória
 
 CABECALHO = "Caixa;Transação;T. Fiscais;Sessão;Data;Tarifa;V. Estadia;Abono;V. Abonado;V. Lançado;Ticket;Forma PGTO"
+TAMANHO_LOTE = 50  # processa 50 páginas por vez
 
 def limpar_valor(v):
     return v.strip().replace("R$ ", "R$")
@@ -40,55 +42,63 @@ def parsear_linha(linha):
 
         return ";".join([caixa, transacao, t_fiscais, sessao, data, tarifa,
                          v_estadia, abono, v_abonado, v_lancado, "", forma_pgto])
-    else:
-        return None  # ✅ Retorna None para linhas que não parsearem (serão descartadas)
+    return None
 
 def extrair_texto_pdf(arquivo_pdf):
     try:
-        texto_acumulado = ""
-
         padrao_emissao      = r"Emissão Período.*?Valores Lançados"
         padrao_detalhamento = r"DETALHAMENTO DAS TRANSAÇÕES.*?RELATÓRIO DE TRANSAÇÕES"
         padrao_pagina       = r"Página:\s*\d+\s*de\s*\d+"
         cabecalho_colunas   = "Caixa V. Lançado Data Tarifa V. Estadia Ticket V. Abonado Transação T. Fiscais Sessão Abono Forma"
 
+        progress = st.progress(0)
+        status   = st.empty()
+
+        linhas_processadas = [CABECALHO]
+        total_transacoes   = 0
+
         with pdfplumber.open(arquivo_pdf) as pdf:
             total = len(pdf.pages)
-            progress = st.progress(0)
-            status   = st.empty()  # ✅ Placeholder para mostrar página atual
 
-            for i, pagina in enumerate(pdf.pages):
-                # ✅ Atualiza o status com a página sendo processada
-                status.info(f"🔄 Processando página **{i + 1}** de **{total}**...")
+            # ✅ Processa em lotes para não estourar memória
+            for lote_inicio in range(0, total, TAMANHO_LOTE):
+                lote_fim   = min(lote_inicio + TAMANHO_LOTE, total)
+                texto_lote = ""
 
-                conteudo = pagina.extract_text()
+                for i in range(lote_inicio, lote_fim):
+                    status.info(f"🔄 Processando página **{i + 1}** de **{total}**...")
 
-                if conteudo:
-                    conteudo = re.sub(padrao_emissao, "", conteudo, flags=re.DOTALL | re.IGNORECASE)
-                    conteudo = re.sub(padrao_detalhamento, "", conteudo, flags=re.DOTALL | re.IGNORECASE)
-                    conteudo = re.sub(padrao_pagina, "", conteudo, flags=re.IGNORECASE)
-                    conteudo = conteudo.replace(cabecalho_colunas, "")
-                    conteudo = re.sub(r'\bPGTO\b', '', conteudo)
-                    texto_acumulado += conteudo + "\n"
+                    pagina   = pdf.pages[i]
+                    conteudo = pagina.extract_text()
 
-                percent = int(((i + 1) / total) * 100)
-                progress.progress(percent)
+                    if conteudo:
+                        conteudo = re.sub(padrao_emissao, "", conteudo, flags=re.DOTALL | re.IGNORECASE)
+                        conteudo = re.sub(padrao_detalhamento, "", conteudo, flags=re.DOTALL | re.IGNORECASE)
+                        conteudo = re.sub(padrao_pagina, "", conteudo, flags=re.IGNORECASE)
+                        conteudo = conteudo.replace(cabecalho_colunas, "")
+                        conteudo = re.sub(r'\bPGTO\b', '', conteudo)
+                        texto_lote += conteudo + "\n"
 
-            status.success(f"✅ Concluído! {total} páginas processadas.")
+                    percent = int(((i + 1) / total) * 100)
+                    progress.progress(percent)
 
-        # ✅ Filtra linhas que contêm "PGTO" e as descarta
-        linhas_brutas = [
-            l.strip() for l in texto_acumulado.split('\n')
-            if l.strip() and 'PGTO' not in l.upper()
-        ]
+                # Processa as linhas do lote atual
+                linhas_brutas = [
+                    l.strip() for l in texto_lote.split('\n')
+                    if l.strip() and 'PGTO' not in l.upper()
+                ]
 
-        linhas_processadas = [CABECALHO]  # ✅ Cabeçalho na primeira linha
+                for linha in linhas_brutas:
+                    resultado = parsear_linha(linha)
+                    if resultado:
+                        linhas_processadas.append(resultado)
+                        total_transacoes += 1
 
-        for linha in linhas_brutas:
-            resultado = parsear_linha(linha)
-            if resultado:  # ✅ Só adiciona se o parse foi bem-sucedido
-                linhas_processadas.append(resultado)
+                # ✅ Libera memória do lote antes de continuar
+                del texto_lote, linhas_brutas
+                gc.collect()
 
+        status.success(f"✅ Concluído! {total} páginas | {total_transacoes} transações extraídas.")
         return "\n".join(linhas_processadas)
 
     except Exception as e:
@@ -116,10 +126,11 @@ def main():
             if resultado:
                 st.session_state.texto_final = resultado
                 st.session_state.nome_arquivo = arquivo_carregado.name.replace(".pdf", "_extraido.txt")
-                st.success(f"✅ {len(resultado.splitlines()) - 1} transações extraídas!")
 
     if st.session_state.texto_final:
-        st.text_area("Prévia dos dados limpos:", st.session_state.texto_final, height=250)
+        total_linhas = len(st.session_state.texto_final.splitlines()) - 1
+        st.info(f"📊 {total_linhas} transações prontas para download.")
+        st.text_area("Prévia:", st.session_state.texto_final, height=200)
 
         st.download_button(
             label="📥 Baixar arquivo .txt",
@@ -127,7 +138,6 @@ def main():
             file_name=st.session_state.nome_arquivo,
             mime="text/plain"
         )
-
 
 if __name__ == "__main__":
     main()
