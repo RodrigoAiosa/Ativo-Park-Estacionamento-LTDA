@@ -5,7 +5,7 @@ import gc
 import tempfile
 import os
 
-CABECALHO = "Caixa;Transação;T. Fiscais;Sessão;Data;Tarifa;V. Estadia;Abono;V. Abonado;V. Lançado;Ticket;Forma PGTO"
+CABECALHO = "Caixa;Transacao;T. Fiscais;Sessao;Data;Tarifa;V. Estadia;Abono;V. Abonado;V. Lancado;Ticket;Forma PGTO"
 
 def limpar_valor(v):
     return v.strip().replace("R$ ", "R$")
@@ -44,29 +44,26 @@ def parsear_linha(linha):
     return None
 
 def processar_pdf(caminho_pdf):
-    padrao_emissao      = r"Emissão Período.*?Valores Lançados"
-    padrao_detalhamento = r"DETALHAMENTO DAS TRANSAÇÕES.*?RELATÓRIO DE TRANSAÇÕES"
-    padrao_pagina       = r"Página:\s*\d+\s*de\s*\d+"
-    cabecalho_colunas   = "Caixa V. Lançado Data Tarifa V. Estadia Ticket V. Abonado Transação T. Fiscais Sessão Abono Forma"
+    padrao_emissao      = r"Emissao Periodo.*?Valores Lancados"
+    padrao_detalhamento = r"DETALHAMENTO DAS TRANSACOES.*?RELATORIO DE TRANSACOES"
+    padrao_pagina       = r"Pagina:\s*\d+\s*de\s*\d+"
+    cabecalho_colunas   = "Caixa V. Lancado Data Tarifa V. Estadia Ticket V. Abonado Transacao T. Fiscais Sessao Abono Forma"
 
     progress         = st.progress(0)
     status           = st.empty()
     total_transacoes = 0
     linhas_resultado = [CABECALHO]
 
-    # ✅ PyMuPDF abre o PDF sem carregar tudo na RAM
-    doc = fitz.open(caminho_pdf)
+    doc   = fitz.open(caminho_pdf)
     total = len(doc)
 
     for i in range(total):
-        status.info(f"🔄 Página **{i + 1}** de **{total}**...")
+        status.info(f"Processando pagina {i + 1} de {total}...")
 
         try:
             pagina   = doc[i]
             conteudo = pagina.get_text("text")
-
-            # ✅ Libera a página imediatamente após extrair o texto
-            pagina = None
+            pagina   = None
         except Exception:
             conteudo = None
 
@@ -86,21 +83,20 @@ def processar_pdf(caminho_pdf):
                     linhas_resultado.append(resultado)
                     total_transacoes += 1
 
-        # ✅ Libera memória a cada 50 páginas
         if i % 50 == 0:
             gc.collect()
 
         progress.progress(int(((i + 1) / total) * 100))
 
     doc.close()
-    status.success(f"✅ Concluído! {total} páginas | {total_transacoes} transações.")
+    status.success(f"Concluido! {total} paginas | {total_transacoes} transacoes.")
     return "\n".join(linhas_resultado)
 
 
 def main():
     st.set_page_config(page_title="Extrator de Dados PDF", page_icon="📄")
-    st.title("📄 Extrator de Dados (Limpeza de Relatório)")
-    st.write("Gere um arquivo .txt limpo, sem cabeçalhos e paginação.")
+    st.title("Extrator de Dados - Limpeza de Relatorio")
+    st.write("Gere um arquivo .txt limpo, sem cabecalhos e paginacao.")
 
     if 'texto_final' not in st.session_state:
         st.session_state.texto_final = None
@@ -113,8 +109,6 @@ def main():
         st.success(f"Arquivo '{arquivo_carregado.name}' carregado!")
 
         if st.button("Processar e Extrair Dados"):
-
-            # Salva PDF no disco antes de abrir
             tmp_pdf = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False)
             tmp_pdf.write(arquivo_carregado.read())
             tmp_pdf.close()
@@ -129,13 +123,13 @@ def main():
 
     if st.session_state.texto_final:
         total_linhas = len(st.session_state.texto_final.splitlines()) - 1
-        st.info(f"📊 {total_linhas} transações prontas para download.")
-        st.text_area("Prévia (primeiras linhas):", 
-                     "\n".join(st.session_state.texto_final.splitlines()[:20]), 
+        st.info(f"{total_linhas} transacoes prontas para download.")
+        st.text_area("Previa (primeiras linhas):",
+                     "\n".join(st.session_state.texto_final.splitlines()[:20]),
                      height=200)
 
         st.download_button(
-            label="📥 Baixar arquivo .txt",
+            label="Baixar arquivo .txt",
             data=st.session_state.texto_final.encode("utf-8"),
             file_name=st.session_state.nome_arquivo,
             mime="text/plain"
@@ -143,9 +137,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```
-
-E no `requirements.txt` **substitua** `pdfplumber` por:
-```
-streamlit
-pymupdf
