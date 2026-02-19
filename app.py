@@ -4,7 +4,7 @@ import re
 import gc  # garbage collector para liberar memória
 
 CABECALHO = "Caixa;Transação;T. Fiscais;Sessão;Data;Tarifa;V. Estadia;Abono;V. Abonado;V. Lançado;Ticket;Forma PGTO"
-TAMANHO_LOTE = 100  # processa 50 páginas por vez
+TAMANHO_LOTE = 20  # processa 50 páginas por vez
 
 def limpar_valor(v):
     return v.strip().replace("R$ ", "R$")
